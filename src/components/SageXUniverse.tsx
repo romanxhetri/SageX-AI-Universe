@@ -3,6 +3,9 @@ import React, { useEffect, useRef, useState, useMemo } from "react";
 
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass";
 import { GoogleGenAI } from "@google/genai";
 import { createClient } from "@supabase/supabase-js";
 
@@ -193,68 +196,82 @@ const AI_TOOLS = [
 
 const AI_MODEL = "gemini-3-flash-preview";
 
-// --- Shader Helper: Simplex Noise (Shared string) ---
-// Simplified Noise for Sun
+// ===========================================
+// 🌟 ENHANCED SHADERS FOR REALISTIC EFFECTS
+// ===========================================
+
+// --- Enhanced Simplex Noise (Multiple Octaves) ---
 const noiseFunction = `
 vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
 vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
 vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
 vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+
 float snoise(vec3 v) {
-  const vec2  C = vec2(1.0/6.0, 1.0/3.0) ;
+  const vec2  C = vec2(1.0/6.0, 1.0/3.0);
   const vec4  D = vec4(0.0, 0.5, 1.0, 2.0);
-  vec3 i  = floor(v + dot(v, C.yyy) );
-  vec3 x0 = v - i + dot(i, C.xxx) ;
+  vec3 i  = floor(v + dot(v, C.yyy));
+  vec3 x0 = v - i + dot(i, C.xxx);
   vec3 g = step(x0.yzx, x0.xyz);
   vec3 l = 1.0 - g;
-  vec3 i1 = min( g.xyz, l.zxy );
-  vec3 i2 = max( g.xyz, l.zxy );
+  vec3 i1 = min(g.xyz, l.zxy);
+  vec3 i2 = max(g.xyz, l.zxy);
   vec3 x1 = x0 - i1 + C.xxx;
   vec3 x2 = x0 - i2 + C.yyy;
   vec3 x3 = x0 - D.yyy;
   i = mod289(i);
-  vec4 p = permute( permute( permute(
-             i.z + vec4(0.0, i1.z, i2.z, 1.0 ))
-           + i.y + vec4(0.0, i1.y, i2.y, 1.0 ))
-           + i.x + vec4(0.0, i1.x, i2.x, 1.0 ));
+  vec4 p = permute(permute(permute(
+             i.z + vec4(0.0, i1.z, i2.z, 1.0))
+           + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+           + i.x + vec4(0.0, i1.x, i2.x, 1.0));
   float n_ = 0.142857142857;
   vec3  ns = n_ * D.wyz - D.xzx;
   vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
   vec4 x_ = floor(j * ns.z);
-  vec4 y_ = floor(j - 7.0 * x_ );
-  vec4 x = x_ *ns.x + ns.yyyy;
-  vec4 y = y_ *ns.x + ns.yyyy;
+  vec4 y_ = floor(j - 7.0 * x_);
+  vec4 x = x_ * ns.x + ns.yyyy;
+  vec4 y = y_ * ns.x + ns.yyyy;
   vec4 h = 1.0 - abs(x) - abs(y);
-  vec4 b0 = vec4( x.xy, y.xy );
-  vec4 b1 = vec4( x.zw, y.zw );
+  vec4 b0 = vec4(x.xy, y.xy);
+  vec4 b1 = vec4(x.zw, y.zw);
   vec4 s0 = floor(b0)*2.0 + 1.0;
   vec4 s1 = floor(b1)*2.0 + 1.0;
   vec4 sh = -step(h, vec4(0.0));
-  vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy ;
-  vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww ;
-  vec3 p0 = vec3(a0.xy,h.x);
-  vec3 p1 = vec3(a0.zw,h.y);
-  vec3 p2 = vec3(a1.xy,h.z);
-  vec3 p3 = vec3(a1.zw,h.w);
-  vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2, p2), dot(p3,p3)));
-  p0 *= norm.x;
-  p1 *= norm.y;
-  p2 *= norm.z;
-  p3 *= norm.w;
+  vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy;
+  vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;
+  vec3 p0 = vec3(a0.xy, h.x);
+  vec3 p1 = vec3(a0.zw, h.y);
+  vec3 p2 = vec3(a1.xy, h.z);
+  vec3 p3 = vec3(a1.zw, h.w);
+  vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
+  p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
   vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
   m = m * m;
-  return 42.0 * dot( m*m, vec4( dot(p0,x0), dot(p1,x1),
-                                dot(p2,x2), dot(p3,x3) ) );
+  return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+}
+
+float fbm(vec3 p) {
+  float value = 0.0;
+  float amplitude = 0.5;
+  float frequency = 1.0;
+  for(int i = 0; i < 5; i++) {
+    value += amplitude * snoise(p * frequency);
+    amplitude *= 0.5;
+    frequency *= 2.0;
+  }
+  return value;
 }
 `;
 
-// --- Sun Shader ---
+// --- 🌟 ENHANCED SUN SHADER (Corona + Plasma + Flares) ---
 const sunVertexShader = `
 varying vec2 vUv;
 varying vec3 vNormal;
+varying vec3 vPosition;
 void main() {
   vUv = uv;
-  vNormal = normal;
+  vNormal = normalize(normalMatrix * normal);
+  vPosition = position;
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }
 `;
@@ -263,16 +280,179 @@ const sunFragmentShader = `
 uniform float time;
 varying vec2 vUv;
 varying vec3 vNormal;
+varying vec3 vPosition;
 ${noiseFunction}
 
 void main() {
-  float noiseVal = snoise(vNormal * 2.5 + time * 0.5);
-  vec3 color1 = vec3(0.8, 0.2, 0.0); 
-  vec3 color2 = vec3(1.0, 0.8, 0.1); 
-  vec3 color3 = vec3(1.0, 1.0, 0.9); 
-  vec3 finalColor = mix(color1, color2, noiseVal * 0.5 + 0.5);
-  finalColor = mix(finalColor, color3, pow(max(0.0, noiseVal), 3.0));
-  gl_FragColor = vec4(finalColor, 1.0);
+  // Multi-octave turbulence for realistic plasma
+  vec3 pos = vPosition * 0.3;
+  float noise1 = fbm(pos + time * 0.15);
+  float noise2 = fbm(pos * 2.0 - time * 0.2);
+  float noise3 = snoise(pos * 4.0 + time * 0.3);
+
+  // Sunspots (darker regions)
+  float sunspots = smoothstep(0.3, 0.7, fbm(pos * 3.0 + vec3(100.0)));
+  sunspots = mix(0.6, 1.0, sunspots);
+
+  // Color temperature gradient (white core -> yellow -> orange -> red)
+  vec3 coreColor = vec3(1.0, 1.0, 0.95);    // White-hot core
+  vec3 midColor = vec3(1.0, 0.85, 0.3);      // Yellow
+  vec3 outerColor = vec3(1.0, 0.4, 0.1);     // Orange
+  vec3 edgeColor = vec3(0.9, 0.2, 0.0);      // Red edge
+
+  // Mix colors based on noise
+  float t1 = noise1 * 0.5 + 0.5;
+  float t2 = noise2 * 0.5 + 0.5;
+
+  vec3 col = mix(outerColor, midColor, t1);
+  col = mix(col, coreColor, pow(t2, 3.0) * 0.5);
+  col = mix(col, edgeColor, pow(1.0 - abs(dot(vNormal, vec3(0.0, 0.0, 1.0))), 2.0) * 0.3);
+
+  // Apply sunspots
+  col *= sunspots;
+
+  // Bright plasma filaments
+  float filaments = pow(max(0.0, noise3), 2.0) * 2.0;
+  col += vec3(1.0, 0.8, 0.4) * filaments;
+
+  // Pulsing brightness
+  float pulse = sin(time * 2.0) * 0.05 + 1.0;
+  col *= pulse;
+
+  // Edge glow enhancement
+  float fresnel = pow(1.0 - abs(dot(vNormal, vec3(0.0, 0.0, 1.0))), 1.5);
+  col += vec3(1.0, 0.5, 0.1) * fresnel * 0.5;
+
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+// --- 🔥 CORONA GLOW SHADER ---
+const coronaVertexShader = `
+varying vec3 vNormal;
+varying vec3 vPosition;
+void main() {
+  vNormal = normalize(normalMatrix * normal);
+  vPosition = position;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const coronaFragmentShader = `
+uniform float time;
+uniform float intensity;
+varying vec3 vNormal;
+varying vec3 vPosition;
+${noiseFunction}
+
+void main() {
+  // Fresnel-based edge glow
+  float fresnel = pow(1.0 - abs(dot(vNormal, vec3(0.0, 0.0, 1.0))), 3.0);
+
+  // Animated corona streamers
+  float noise = fbm(vPosition * 0.5 + time * 0.1);
+  float streamers = pow(max(0.0, noise), 1.5);
+
+  // Corona color
+  vec3 coronaColor = mix(
+    vec3(1.0, 0.6, 0.2),   // Orange
+    vec3(1.0, 0.3, 0.05),  // Red-orange
+    streamers
+  );
+
+  // Add shimmer
+  float shimmer = sin(time * 3.0 + vPosition.x * 10.0) * 0.1 + 0.9;
+
+  float alpha = fresnel * intensity * shimmer * (0.5 + streamers * 0.5);
+
+  gl_FragColor = vec4(coronaColor, alpha);
+}
+`;
+
+// --- 🪐 PLANET ATMOSPHERE SHADER ---
+const atmosphereVertexShader = `
+varying vec3 vNormal;
+varying vec3 vWorldPosition;
+void main() {
+  vNormal = normalize(normalMatrix * normal);
+  vec4 worldPos = modelMatrix * vec4(position, 1.0);
+  vWorldPosition = worldPos.xyz;
+  gl_Position = projectionMatrix * viewMatrix * worldPos;
+}
+`;
+
+const atmosphereFragmentShader = `
+uniform vec3 glowColor;
+uniform float intensity;
+uniform float power;
+varying vec3 vNormal;
+varying vec3 vWorldPosition;
+
+void main() {
+  vec3 viewDirection = normalize(cameraPosition - vWorldPosition);
+  float fresnel = pow(1.0 - abs(dot(viewDirection, vNormal)), power);
+
+  // Atmospheric scattering colors
+  vec3 atmosphereColor = glowColor;
+  vec3 rimColor = glowColor * 1.5;
+
+  vec3 finalColor = mix(atmosphereColor, rimColor, fresnel);
+
+  float alpha = fresnel * intensity;
+
+  gl_FragColor = vec4(finalColor, alpha);
+}
+`;
+
+// --- 🌌 NEBULA BACKGROUND SHADER ---
+const nebulaVertexShader = `
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const nebulaFragmentShader = `
+uniform float time;
+varying vec2 vUv;
+${noiseFunction}
+
+void main() {
+  vec2 uv = vUv * 2.0 - 1.0;
+
+  // Multiple nebula layers
+  vec3 pos1 = vec3(uv * 1.5, time * 0.01);
+  vec3 pos2 = vec3(uv * 3.0 + 100.0, time * 0.015);
+  vec3 pos3 = vec3(uv * 5.0 + 200.0, time * 0.02);
+
+  float n1 = fbm(pos1) * 0.5 + 0.5;
+  float n2 = fbm(pos2) * 0.5 + 0.5;
+  float n3 = fbm(pos3) * 0.5 + 0.5;
+
+  // Nebula colors (purple, blue, pink)
+  vec3 purple = vec3(0.4, 0.1, 0.5);
+  vec3 blue = vec3(0.1, 0.2, 0.5);
+  vec3 pink = vec3(0.5, 0.2, 0.3);
+  vec3 cyan = vec3(0.1, 0.4, 0.5);
+
+  // Mix nebula colors
+  vec3 nebula = mix(purple, blue, n1);
+  nebula = mix(nebula, pink, n2 * 0.5);
+  nebula = mix(nebula, cyan, n3 * 0.3);
+
+  // Stars in nebula
+  float stars = pow(snoise(vec3(uv * 50.0, 0.0)), 20.0);
+
+  // Combine
+  vec3 color = nebula * 0.15;
+  color += vec3(1.0) * stars * 0.8;
+
+  // Vignette
+  float vignette = 1.0 - length(uv) * 0.5;
+  color *= vignette;
+
+  gl_FragColor = vec4(color, 1.0);
 }
 `;
 
@@ -1022,6 +1202,24 @@ function SolarSystemScene({ onHubSelect, isPaused, mode }: { onHubSelect: (h: Hu
     // CRITICAL: Prevent scrolling/gestures on canvas from interfering with UI
     renderer.domElement.style.touchAction = 'none'; 
     mountRef.current.appendChild(renderer.domElement);
+
+    // ===========================================
+    // ✨ POST-PROCESSING BLOOM EFFECT
+    // ===========================================
+
+    // Effect Composer for post-processing
+    const composer = new EffectComposer(renderer);
+    const renderPass = new RenderPass(scene, camera);
+    composer.addPass(renderPass);
+
+    // Bloom pass for cinematic glow
+    const bloomPass = new UnrealBloomPass(
+        new THREE.Vector2(window.innerWidth, window.innerHeight),
+        isLowEnd ? 0.3 : 0.6,    // Bloom strength (reduced for low-end)
+        isLowEnd ? 0.3 : 0.4,    // Bloom radius
+        isLowEnd ? 0.9 : 0.85    // Bloom threshold (lower = more bloom)
+    );
+    composer.addPass(bloomPass);
     
     const labelContainer = document.createElement('div'); 
     labelContainer.style.position = 'absolute'; labelContainer.style.top = '0'; labelContainer.style.left = '0'; 
@@ -1047,19 +1245,34 @@ function SolarSystemScene({ onHubSelect, isPaused, mode }: { onHubSelect: (h: Hu
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('pointerlockchange', onPointerLockChange);
     
-    // LIGHTING
-    const ambientLight = new THREE.AmbientLight(0x404040, 2); 
-    scene.add(ambientLight);
-    
-    // Only one point light for the sun
-    const coreLight = new THREE.PointLight(0xffaa00, 3, 400); 
-    scene.add(coreLight);
-    
-    // GEOMETRY OPTIMIZATION
-    const segs = isLowEnd ? 32 : 64; 
+    // ===========================================
+    // 🌟 ENHANCED LIGHTING SYSTEM
+    // ===========================================
 
-    // --- SUN SHADER ---
-    const coreGeo = new THREE.SphereGeometry(10, segs, segs); 
+    // Ambient light for base visibility (soft galaxy light)
+    const ambientLight = new THREE.AmbientLight(0x1a1a2e, 0.8);
+    scene.add(ambientLight);
+
+    // Primary sun light (warm orange)
+    const coreLight = new THREE.PointLight(0xffaa33, 3, 500);
+    coreLight.castShadow = false; // Shadows disabled for performance
+    scene.add(coreLight);
+
+    // Secondary fill light (soft blue from galaxy)
+    const fillLight = new THREE.PointLight(0x4466ff, 0.5, 800);
+    fillLight.position.set(100, 50, -100);
+    scene.add(fillLight);
+
+    // GEOMETRY OPTIMIZATION
+    const segs = isLowEnd ? 32 : 64;
+    const coronaSegs = isLowEnd ? 24 : 48;
+
+    // ===========================================
+    // 🌟 ENHANCED SUN WITH MULTI-LAYER CORONA
+    // ===========================================
+
+    // --- INNER CORE (Plasma surface) ---
+    const coreGeo = new THREE.SphereGeometry(10, segs, segs);
     const coreMat = new THREE.ShaderMaterial({
         vertexShader: sunVertexShader,
         fragmentShader: sunFragmentShader,
@@ -1067,91 +1280,372 @@ function SolarSystemScene({ onHubSelect, isPaused, mode }: { onHubSelect: (h: Hu
             time: { value: 0 }
         }
     });
-    const core = new THREE.Mesh(coreGeo, coreMat); 
+    const core = new THREE.Mesh(coreGeo, coreMat);
     scene.add(core);
 
-    const glowGeo = new THREE.SphereGeometry(12, segs, segs); 
-    const glowMat = new THREE.MeshBasicMaterial({ color: 0xffaa00, transparent: true, opacity: 0.3 }); 
-    const glow = new THREE.Mesh(glowGeo, glowMat); 
-    scene.add(glow);
-    
-    // Outer Halo
-    const haloGeo = new THREE.SphereGeometry(16, segs, segs); 
-    const haloMat = new THREE.MeshBasicMaterial({ color: 0xff5500, transparent: true, opacity: 0.15, blending: THREE.AdditiveBlending }); 
-    const halo = new THREE.Mesh(haloGeo, haloMat); 
+    // --- INNER CORONA (Bright plasma glow) ---
+    const corona1Geo = new THREE.SphereGeometry(12, coronaSegs, coronaSegs);
+    const corona1Mat = new THREE.ShaderMaterial({
+        vertexShader: coronaVertexShader,
+        fragmentShader: coronaFragmentShader,
+        uniforms: {
+            time: { value: 0 },
+            intensity: { value: 1.2 }
+        },
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        side: THREE.BackSide,
+        depthWrite: false
+    });
+    const corona1 = new THREE.Mesh(corona1Geo, corona1Mat);
+    scene.add(corona1);
+
+    // --- MIDDLE CORONA (Softer glow) ---
+    const corona2Geo = new THREE.SphereGeometry(16, coronaSegs, coronaSegs);
+    const corona2Mat = new THREE.ShaderMaterial({
+        vertexShader: coronaVertexShader,
+        fragmentShader: coronaFragmentShader,
+        uniforms: {
+            time: { value: 0 },
+            intensity: { value: 0.6 }
+        },
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        side: THREE.BackSide,
+        depthWrite: false
+    });
+    const corona2 = new THREE.Mesh(corona2Geo, corona2Mat);
+    scene.add(corona2);
+
+    // --- OUTER HALO (Atmospheric glow) ---
+    const haloGeo = new THREE.SphereGeometry(22, coronaSegs, coronaSegs);
+    const haloMat = new THREE.MeshBasicMaterial({
+        color: 0xff6600,
+        transparent: true,
+        opacity: 0.08,
+        blending: THREE.AdditiveBlending,
+        side: THREE.BackSide
+    });
+    const halo = new THREE.Mesh(haloGeo, haloMat);
     scene.add(halo);
 
-    // REMOVED: Asteroid Belt, Holographic Billboards, Warp Lines, Comet, UFOs
-    // to meet "remove all stones and that blue objects" requirement.
+    // --- SOLAR FLARE PARTICLES ---
+    const flareCount = isLowEnd ? 30 : 80;
+    const flareGeo = new THREE.BufferGeometry();
+    const flarePositions = new Float32Array(flareCount * 3);
+    const flareSizes = new Float32Array(flareCount);
+    const flareAngles = new Float32Array(flareCount);
 
-    // STARS
-    const starsGeo = new THREE.BufferGeometry(); 
-    // Reduced star count for low end
-    const starsCnt = isLowEnd ? 1500 : 4000; 
-    const posArray = new Float32Array(starsCnt * 3); 
-    const colorsArray = new Float32Array(starsCnt * 3);
-    for(let i=0; i<starsCnt*3; i+=3) { 
-        posArray[i] = (Math.random() - 0.5) * 1200; 
-        posArray[i+1] = (Math.random() - 0.5) * 1200;
-        posArray[i+2] = (Math.random() - 0.5) * 1200;
-        
-        const c = 0.8 + Math.random() * 0.2;
-        colorsArray[i] = c; colorsArray[i+1] = c; colorsArray[i+2] = c;
-    } 
-    starsGeo.setAttribute('position', new THREE.BufferAttribute(posArray, 3)); 
-    starsGeo.setAttribute('color', new THREE.BufferAttribute(colorsArray, 3));
-    const starsMat = new THREE.PointsMaterial({
-        size: isLowEnd ? 2.0 : 0.8, 
-        vertexColors: true, 
+    for (let i = 0; i < flareCount; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const radius = 10 + Math.random() * 8;
+        const height = (Math.random() - 0.5) * 8;
+        flarePositions[i * 3] = Math.cos(angle) * radius;
+        flarePositions[i * 3 + 1] = height;
+        flarePositions[i * 3 + 2] = Math.sin(angle) * radius;
+        flareSizes[i] = 0.5 + Math.random() * 1.5;
+        flareAngles[i] = angle;
+    }
+
+    flareGeo.setAttribute('position', new THREE.BufferAttribute(flarePositions, 3));
+    flareGeo.setAttribute('size', new THREE.BufferAttribute(flareSizes, 1));
+
+    const flareMat = new THREE.PointsMaterial({
+        color: 0xffcc00,
+        size: 2,
+        transparent: true,
+        opacity: 0.8,
+        blending: THREE.AdditiveBlending,
         sizeAttenuation: true
-    }); 
-    const starMesh = new THREE.Points(starsGeo, starsMat); 
-    scene.add(starMesh);
+    });
+    const flares = new THREE.Points(flareGeo, flareMat);
+    scene.add(flares);
+
+    // ===========================================
+    // ✨ ENHANCED MULTI-LAYER STARFIELD
+    // ===========================================
+
+    // --- LAYER 1: Bright foreground stars ---
+    const stars1Geo = new THREE.BufferGeometry();
+    const stars1Cnt = isLowEnd ? 800 : 2000;
+    const pos1Array = new Float32Array(stars1Cnt * 3);
+    const colors1Array = new Float32Array(stars1Cnt * 3);
+    const sizes1Array = new Float32Array(stars1Cnt);
+
+    for (let i = 0; i < stars1Cnt; i++) {
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+        const r = 400 + Math.random() * 300;
+
+        pos1Array[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+        pos1Array[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+        pos1Array[i * 3 + 2] = r * Math.cos(phi);
+
+        // Star colors: blue-white, white, yellow, red
+        const colorType = Math.random();
+        if (colorType < 0.3) {
+            // Blue-white (hot stars)
+            colors1Array[i * 3] = 0.8 + Math.random() * 0.2;
+            colors1Array[i * 3 + 1] = 0.9 + Math.random() * 0.1;
+            colors1Array[i * 3 + 2] = 1.0;
+        } else if (colorType < 0.6) {
+            // White
+            const b = 0.9 + Math.random() * 0.1;
+            colors1Array[i * 3] = b;
+            colors1Array[i * 3 + 1] = b;
+            colors1Array[i * 3 + 2] = b;
+        } else if (colorType < 0.85) {
+            // Yellow (sun-like)
+            colors1Array[i * 3] = 1.0;
+            colors1Array[i * 3 + 1] = 0.9 + Math.random() * 0.1;
+            colors1Array[i * 3 + 2] = 0.6 + Math.random() * 0.2;
+        } else {
+            // Red giants
+            colors1Array[i * 3] = 1.0;
+            colors1Array[i * 3 + 1] = 0.4 + Math.random() * 0.3;
+            colors1Array[i * 3 + 2] = 0.3 + Math.random() * 0.2;
+        }
+
+        sizes1Array[i] = 1.0 + Math.random() * 2.0;
+    }
+
+    stars1Geo.setAttribute('position', new THREE.BufferAttribute(pos1Array, 3));
+    stars1Geo.setAttribute('color', new THREE.BufferAttribute(colors1Array, 3));
+    stars1Geo.setAttribute('size', new THREE.BufferAttribute(sizes1Array, 1));
+
+    const stars1Mat = new THREE.PointsMaterial({
+        size: isLowEnd ? 1.5 : 1.0,
+        vertexColors: true,
+        sizeAttenuation: true,
+        transparent: true,
+        opacity: 1.0
+    });
+    const stars1 = new THREE.Points(stars1Geo, stars1Mat);
+    scene.add(stars1);
+
+    // --- LAYER 2: Dense background stars ---
+    const stars2Geo = new THREE.BufferGeometry();
+    const stars2Cnt = isLowEnd ? 1500 : 5000;
+    const pos2Array = new Float32Array(stars2Cnt * 3);
+    const colors2Array = new Float32Array(stars2Cnt * 3);
+
+    for (let i = 0; i < stars2Cnt; i++) {
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+        const r = 700 + Math.random() * 400;
+
+        pos2Array[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+        pos2Array[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+        pos2Array[i * 3 + 2] = r * Math.cos(phi);
+
+        const b = 0.5 + Math.random() * 0.5;
+        colors2Array[i * 3] = b * 0.9;
+        colors2Array[i * 3 + 1] = b * 0.95;
+        colors2Array[i * 3 + 2] = b;
+    }
+
+    stars2Geo.setAttribute('position', new THREE.BufferAttribute(pos2Array, 3));
+    stars2Geo.setAttribute('color', new THREE.BufferAttribute(colors2Array, 3));
+
+    const stars2Mat = new THREE.PointsMaterial({
+        size: isLowEnd ? 0.6 : 0.4,
+        vertexColors: true,
+        sizeAttenuation: true,
+        transparent: true,
+        opacity: 0.7
+    });
+    const stars2 = new THREE.Points(stars2Geo, stars2Mat);
+    scene.add(stars2);
+
+    // ===========================================
+    // 🌌 NEBULA BACKGROUND
+    // ===========================================
+
+    if (!isLowEnd) {
+        // Nebula sky dome
+        const nebulaGeo = new THREE.SphereGeometry(950, 32, 32);
+        const nebulaMat = new THREE.ShaderMaterial({
+            vertexShader: nebulaVertexShader,
+            fragmentShader: nebulaFragmentShader,
+            uniforms: {
+                time: { value: 0 }
+            },
+            side: THREE.BackSide,
+            depthWrite: false
+        });
+        const nebula = new THREE.Mesh(nebulaGeo, nebulaMat);
+        scene.add(nebula);
+    }
+
+    // ===========================================
+    // 💫 COSMIC DUST PARTICLES
+    // ===========================================
+
+    const dustGeo = new THREE.BufferGeometry();
+    const dustCnt = isLowEnd ? 200 : 600;
+    const dustPosArray = new Float32Array(dustCnt * 3);
+
+    for (let i = 0; i < dustCnt; i++) {
+        dustPosArray[i * 3] = (Math.random() - 0.5) * 300;
+        dustPosArray[i * 3 + 1] = (Math.random() - 0.5) * 300;
+        dustPosArray[i * 3 + 2] = (Math.random() - 0.5) * 300;
+    }
+
+    dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPosArray, 3));
+    const dustMat = new THREE.PointsMaterial({
+        color: 0xaaddff,
+        size: 0.5,
+        transparent: true,
+        opacity: 0.3,
+        blending: THREE.AdditiveBlending,
+        sizeAttenuation: true
+    });
+    const dustMesh = new THREE.Points(dustGeo, dustMat);
+    scene.add(dustMesh);
 
     hubsRef.current = [];
     HUBS.forEach((h, i) => {
         let geo;
         if (h.geometryType === 'torus') {
-            // Lower segments for Torus on low end
             geo = new THREE.TorusGeometry(h.radius, h.radius * 0.4, isLowEnd ? 12 : 16, isLowEnd ? 24 : 32);
         } else if (h.geometryType === 'icosahedron') {
-            geo = new THREE.IcosahedronGeometry(h.radius, 0);
+            geo = new THREE.IcosahedronGeometry(h.radius, 1);
         } else {
-            geo = new THREE.SphereGeometry(h.radius, segs, segs); 
+            geo = new THREE.SphereGeometry(h.radius, segs, segs);
         }
 
-        const mat = new THREE.MeshLambertMaterial({ 
+        // Enhanced planet material with emissive glow
+        const mat = new THREE.MeshStandardMaterial({
             color: h.color,
-            wireframe: h.geometryType === 'icosahedron' 
-        }); 
+            metalness: 0.3,
+            roughness: 0.7,
+            emissive: h.color,
+            emissiveIntensity: 0.1,
+            wireframe: h.geometryType === 'icosahedron'
+        });
         const mesh = new THREE.Mesh(geo, mat);
-        
-        if (h.hasRing) { 
-            const ringGeo = new THREE.RingGeometry(h.radius * 1.5, h.radius * 2.2, isLowEnd ? 24 : 32); 
-            const ringMat = new THREE.MeshBasicMaterial({ color: 0xffd700, side: THREE.DoubleSide, transparent: true, opacity: 0.5 }); 
-            const ring = new THREE.Mesh(ringGeo, ringMat); 
-            ring.rotation.x = -Math.PI / 2; 
-            ring.rotation.y = Math.PI / 6; 
-            mesh.add(ring); 
+
+        // ===========================================
+        // 🪐 PLANET ATMOSPHERE EFFECTS
+        // ===========================================
+
+        if (!isLowEnd) {
+            // Atmosphere glow shell
+            const atmosphereGeo = new THREE.SphereGeometry(h.radius * 1.15, 32, 32);
+            const atmosphereMat = new THREE.ShaderMaterial({
+                vertexShader: atmosphereVertexShader,
+                fragmentShader: atmosphereFragmentShader,
+                uniforms: {
+                    glowColor: { value: new THREE.Color(h.color) },
+                    intensity: { value: 0.8 },
+                    power: { value: 2.5 }
+                },
+                transparent: true,
+                blending: THREE.AdditiveBlending,
+                side: THREE.BackSide,
+                depthWrite: false
+            });
+            const atmosphere = new THREE.Mesh(atmosphereGeo, atmosphereMat);
+            mesh.add(atmosphere);
         }
-        
+
+        // Special effects for specific hubs
+        if (h.hasRing) {
+            // Enhanced ring with gradient
+            const ringGeo = new THREE.RingGeometry(h.radius * 1.5, h.radius * 2.4, 64);
+            const ringMat = new THREE.ShaderMaterial({
+                vertexShader: `
+                    varying vec2 vUv;
+                    void main() {
+                        vUv = uv;
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    }
+                `,
+                fragmentShader: `
+                    varying vec2 vUv;
+                    void main() {
+                        float dist = length(vUv - 0.5) * 2.0;
+                        float alpha = smoothstep(0.3, 0.5, dist) * smoothstep(1.0, 0.8, dist);
+                        vec3 ringColor = mix(vec3(0.8, 0.6, 0.2), vec3(1.0, 0.9, 0.5), dist);
+                        gl_FragColor = vec4(ringColor, alpha * 0.6);
+                    }
+                `,
+                transparent: true,
+                side: THREE.DoubleSide,
+                depthWrite: false
+            });
+            const ring = new THREE.Mesh(ringGeo, ringMat);
+            ring.rotation.x = -Math.PI / 2;
+            ring.rotation.y = Math.PI / 6;
+            mesh.add(ring);
+
+            // Ring particles
+            const ringDustGeo = new THREE.BufferGeometry();
+            const ringDustCount = isLowEnd ? 50 : 150;
+            const ringDustPos = new Float32Array(ringDustCount * 3);
+            for (let j = 0; j < ringDustCount; j++) {
+                const angle = Math.random() * Math.PI * 2;
+                const r = h.radius * 1.5 + Math.random() * h.radius * 0.9;
+                ringDustPos[j * 3] = Math.cos(angle) * r;
+                ringDustPos[j * 3 + 1] = (Math.random() - 0.5) * 0.3;
+                ringDustPos[j * 3 + 2] = Math.sin(angle) * r;
+            }
+            ringDustGeo.setAttribute('position', new THREE.BufferAttribute(ringDustPos, 3));
+            const ringDustMat = new THREE.PointsMaterial({
+                color: 0xffdd88,
+                size: 0.3,
+                transparent: true,
+                opacity: 0.6,
+                blending: THREE.AdditiveBlending
+            });
+            const ringDust = new THREE.Points(ringDustGeo, ringDustMat);
+            ringDust.rotation.x = -Math.PI / 2;
+            ringDust.rotation.y = Math.PI / 6;
+            mesh.add(ringDust);
+        }
+
         if (h.geometryType === 'icosahedron') {
-             const innerGeo = new THREE.IcosahedronGeometry(h.radius * 0.6, 0);
-             const innerMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-             const inner = new THREE.Mesh(innerGeo, innerMat);
-             mesh.add(inner);
+            // Inner core glow for video hub
+            const innerGeo = new THREE.IcosahedronGeometry(h.radius * 0.5, 1);
+            const innerMat = new THREE.MeshBasicMaterial({
+                color: 0xffffff,
+                transparent: true,
+                opacity: 0.9
+            });
+            const inner = new THREE.Mesh(innerGeo, innerMat);
+            mesh.add(inner);
+
+            // Outer wireframe for tech look
+            const wireGeo = new THREE.IcosahedronGeometry(h.radius * 1.1, 1);
+            const wireMat = new THREE.MeshBasicMaterial({
+                color: h.color,
+                wireframe: true,
+                transparent: true,
+                opacity: 0.4
+            });
+            const wire = new THREE.Mesh(wireGeo, wireMat);
+            mesh.add(wire);
         }
 
         scene.add(mesh);
-        
-        const orbitGeo = new THREE.RingGeometry(h.distance - 0.15, h.distance + 0.15, isLowEnd ? 64 : 128); 
-        const orbitMat = new THREE.MeshBasicMaterial({ color: h.color, side: THREE.DoubleSide, transparent: true, opacity: 0.15 }); 
-        const orbitLine = new THREE.Mesh(orbitGeo, orbitMat); 
-        orbitLine.rotation.x = -Math.PI / 2; 
+
+        // Enhanced orbit trail with glow
+        const orbitGeo = new THREE.RingGeometry(h.distance - 0.2, h.distance + 0.2, 128);
+        const orbitMat = new THREE.MeshBasicMaterial({
+            color: h.color,
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: 0.2,
+            blending: THREE.AdditiveBlending
+        });
+        const orbitLine = new THREE.Mesh(orbitGeo, orbitMat);
+        orbitLine.rotation.x = -Math.PI / 2;
         scene.add(orbitLine);
-        
-        const label = document.createElement('div'); label.className = 'planet-label'; label.innerHTML = `<span style="font-size:1.2em; margin-right:4px;">${h.icon}</span> ${h.name}`; 
-        
+
+        const label = document.createElement('div');
+        label.className = 'planet-label';
+        label.innerHTML = `<span style="font-size:1.2em; margin-right:4px;">${h.icon}</span> ${h.name}`;
+
         label.onclick = () => {
             if (warpRef.current.active) return;
             warpRef.current.active = true;
@@ -1163,13 +1657,13 @@ function SolarSystemScene({ onHubSelect, isPaused, mode }: { onHubSelect: (h: Hu
             warpRef.current.hub = h;
             controlsRef.current.enabled = false;
         };
-        
+
         labelContainer.appendChild(label);
-        
-        hubsRef.current.push({ 
-            mesh, 
-            data: h, 
-            angle: Math.random() * Math.PI * 2, 
+
+        hubsRef.current.push({
+            mesh,
+            data: h,
+            angle: Math.random() * Math.PI * 2,
             labelDiv: label
         });
     });
@@ -1225,8 +1719,63 @@ function SolarSystemScene({ onHubSelect, isPaused, mode }: { onHubSelect: (h: Hu
         const delta = clock.getDelta(); 
         const elapsedTime = clock.getElapsedTime();
         const { isPaused, mode } = simState.current;
-        
+
+        // ===========================================
+        // 🌟 UPDATE SUN & CORONA ANIMATIONS
+        // ===========================================
+
+        // Sun core shader
         coreMat.uniforms.time.value = elapsedTime;
+
+        // Corona layers
+        corona1Mat.uniforms.time.value = elapsedTime;
+        corona2Mat.uniforms.time.value = elapsedTime;
+
+        // Pulsing corona intensity
+        const pulseIntensity = 1.0 + Math.sin(elapsedTime * 2) * 0.1;
+        corona1Mat.uniforms.intensity.value = 1.2 * pulseIntensity;
+
+        // Solar flare animation
+        const flarePositions = flares.geometry.attributes.position.array as Float32Array;
+        for (let i = 0; i < flareCount; i++) {
+            const angle = flareAngles[i] + elapsedTime * 0.3;
+            const radius = 10 + Math.sin(elapsedTime * 2 + i) * 3 + Math.random() * 2;
+            flarePositions[i * 3] = Math.cos(angle) * radius;
+            flarePositions[i * 3 + 1] += (Math.random() - 0.5) * 0.1;
+            flarePositions[i * 3 + 2] = Math.sin(angle) * radius;
+        }
+        flares.geometry.attributes.position.needsUpdate = true;
+
+        // Core rotation
+        core.rotation.y += 0.002;
+
+        // ===========================================
+        // ✨ UPDATE STARFIELD ANIMATIONS
+        // ===========================================
+
+        // Slow rotation for background stars
+        stars1.rotation.y += 0.00005;
+        stars2.rotation.y -= 0.00003;
+
+        // ===========================================
+        // 🌌 UPDATE NEBULA (if exists)
+        // ===========================================
+
+        scene.traverse((obj) => {
+            if (obj instanceof THREE.Mesh && obj.material instanceof THREE.ShaderMaterial) {
+                if (obj.material.uniforms && obj.material.uniforms.time) {
+                    obj.material.uniforms.time.value = elapsedTime;
+                }
+            }
+        });
+
+        // Cosmic dust drift
+        dustMesh.rotation.y += 0.0001;
+        dustMesh.rotation.x += 0.00005;
+
+        // ===========================================
+        // 🚀 WARP & NAVIGATION
+        // ===========================================
 
         if (warpRef.current.active) {
             const t = (elapsedTime - warpRef.current.startTime) / warpRef.current.duration;
@@ -1235,7 +1784,7 @@ function SolarSystemScene({ onHubSelect, isPaused, mode }: { onHubSelect: (h: Hu
             if (t < 1.0) {
                 camera.position.lerpVectors(warpRef.current.startPos, warpRef.current.target, easeT);
                 camera.lookAt(warpRef.current.hub ? hubsRef.current.find(h => h.data.id === warpRef.current.hub!.id)!.mesh.position : new THREE.Vector3());
-                
+
                 const warpIntensity = Math.sin(t * Math.PI); 
                 camera.fov = 45 + (warpIntensity * 30); 
                 camera.updateProjectionMatrix();
@@ -1248,11 +1797,10 @@ function SolarSystemScene({ onHubSelect, isPaused, mode }: { onHubSelect: (h: Hu
                 controlsRef.current.enabled = true;
             }
         }
-        
+
         if (mode === 'cinematic' && orbitControls && !warpRef.current.active) { 
             if (moveState.current.rotX !== 0 || moveState.current.rotY !== 0) {
                  orbitControls.autoRotate = false;
-                 // Manually update camera position based on spherical coordinates
                  const offset = new THREE.Vector3();
                  offset.copy(camera.position).sub(orbitControls.target);
                  const spherical = new THREE.Spherical();
@@ -1272,14 +1820,14 @@ function SolarSystemScene({ onHubSelect, isPaused, mode }: { onHubSelect: (h: Hu
         else if (mode === 'pilot' && !warpRef.current.active) {
              if (orbitControls) orbitControls.enabled = false;
              const speed = 50 * delta; const velocity = new THREE.Vector3();
-             
+
              if (moveState.current.forward) velocity.z -= speed; 
              if (moveState.current.backward) velocity.z += speed; 
              if (moveState.current.left) velocity.x -= speed; 
              if (moveState.current.right) velocity.x += speed; 
              if (moveState.current.up) velocity.y += speed; 
              if (moveState.current.down) velocity.y -= speed;
-             
+
              const joy = moveState.current.joyVector;
              if (joy.lengthSq() > 0.01) {
                  velocity.x += joy.x * speed; 
@@ -1289,18 +1837,22 @@ function SolarSystemScene({ onHubSelect, isPaused, mode }: { onHubSelect: (h: Hu
              camera.translateX(velocity.x); 
              camera.translateZ(velocity.z); 
              camera.translateY(velocity.y); 
-             
+
              camera.rotateY(moveState.current.rotY); 
              camera.rotateX(moveState.current.rotX); 
              moveState.current.rotX *= 0.85; 
              moveState.current.rotY *= 0.85; 
-             
+
              camera.rotation.z = 0; 
         } 
         else if (mode === 'directory' && orbitControls) { 
             orbitControls.autoRotate = true; orbitControls.autoRotateSpeed = 0.2; orbitControls.update(); 
         }
-        
+
+        // ===========================================
+        // 🪐 UPDATE PLANET ORBITS & ROTATIONS
+        // ===========================================
+
         if (!isPaused && !warpRef.current.active) { 
             hubsRef.current.forEach(h => { 
                 h.angle += h.data.speed * 0.5; 
@@ -1310,19 +1862,19 @@ function SolarSystemScene({ onHubSelect, isPaused, mode }: { onHubSelect: (h: Hu
                 h.mesh.rotation.y += 0.005;
                 if(h.data.geometryType === 'torus' || h.data.geometryType === 'icosahedron') h.mesh.rotation.x += 0.005;
             });
-            core.rotation.y += 0.002; 
-            starMesh.rotation.y -= 0.0001; 
         }
 
-        // Label Positioning 
-        // Optimization: Run label update less frequently on low end devices
+        // ===========================================
+        // 🏷️ LABEL POSITIONING
+        // ===========================================
+
         const updateFrequency = isLowEnd ? 4 : 2;
         if (frame % updateFrequency === 0 && !warpRef.current.active) {
             hubsRef.current.forEach(h => { 
                 if (h.labelDiv && h.mesh) { 
                     h.mesh.getWorldPosition(tempV); 
                     tempV.project(camera); 
-                    
+
                     if (tempV.z < 1 && tempV.z > -1) { 
                         const x = (tempV.x * .5 + .5) * width; 
                         const y = (tempV.y * -.5 + .5) * height; 
@@ -1336,8 +1888,11 @@ function SolarSystemScene({ onHubSelect, isPaused, mode }: { onHubSelect: (h: Hu
         } else if (warpRef.current.active) {
              hubsRef.current.forEach(h => { if(h.labelDiv) h.labelDiv.style.display = 'none'; });
         }
-        
+
         renderer.render(scene, camera);
+
+        // Use composer for bloom effect (commented out - direct render for performance)
+        // composer.render();
     };
     animate();
     

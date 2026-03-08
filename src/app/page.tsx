@@ -1,10 +1,9 @@
 'use client'
 
 import dynamic from 'next/dynamic'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 
 // Dynamic import with ssr: false is required for Three.js components
-// because Three.js uses browser-specific APIs (window, document, WebGL)
-// that are not available during server-side rendering
 const SageXUniverse = dynamic(() => import('@/components/SageXUniverse'), {
   ssr: false,
   loading: () => (
